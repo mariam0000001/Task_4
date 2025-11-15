@@ -28,12 +28,14 @@ if (!process.env.JWT_SECRET) {
 const apiBaseUrl = process.env.TEST_BASE_URL || 'http://127.0.0.1:4000/api';
 const createdPerkIds = new Set();
 
+// Ensure axios works under Node/Jest (no browser XHR)
 axios.defaults.adapter = httpAdapter;
 
 beforeAll(async () => {
+  // Bare axios for auth/bootstrapping calls
   const http = axios.create({ baseURL: apiBaseUrl });
 
-
+  // Create a unique test user for this suite
   const credentials = {
     name: `UI Test User ${crypto.randomUUID()}`,
     email: `ui.tester.${Date.now()}@example.com`,
@@ -43,24 +45,46 @@ beforeAll(async () => {
   const registration = await http.post('/auth/register', credentials);
   const registrationPayload = registration.data;
 
+  // Use the app's shared axios instance so interceptors (e.g., auth) apply
   const { api } = await import('../src/api.js');
   api.defaults.baseURL = apiBaseUrl;
 
+  // Store token so the frontend api instance can attach Authorization
   window.localStorage.setItem('token', registrationPayload.token);
 
-  const seedPerkResponse = await api.post('/perks', {
-    title: `Integration Preview Benefit ${crypto.randomUUID()}`,
-    description: 'Baseline record created during setup for deterministic rendering checks.',
+  // Baseline seed payload
+  const seedBase = {
+    title: 'Integration Preview Benefit',
+    description:
+      'Baseline record created during setup for deterministic rendering checks.',
     category: 'travel',
-    merchant: `Integration Merchant ${crypto.randomUUID()}`,
+    merchant: 'Integration Merchant',
     discountPercent: 15
-  });
+  };
 
-  const seededPerk = seedPerkResponse.data.perk;
+  // Idempotent seed: if it already exists (409), retry with a unique title
+  let seededPerk;
+  try {
+    const seedPerkResponse = await api.post('/perks', seedBase);
+    seededPerk = seedPerkResponse.data.perk;
+  } catch (err) {
+    if (err?.response?.status === 409) {
+      const uniqueTitle = `${seedBase.title} ${crypto.randomUUID().slice(0, 8)}`;
+      const retryResponse = await api.post('/perks', {
+        ...seedBase,
+        title: uniqueTitle
+      });
+      seededPerk = retryResponse.data.perk;
+    } else {
+      throw err;
+    }
+  }
+
   if (seededPerk?._id) {
     createdPerkIds.add(seededPerk._id);
   }
 
+  // Expose useful objects to tests
   global.__TEST_CONTEXT__ = {
     baseUrl: apiBaseUrl,
     credentials,
@@ -78,8 +102,12 @@ afterAll(async () => {
   if (context) {
     const authHeaders = { Authorization: `Bearer ${context.token}` };
 
-    const http = axios.create({ baseURL: context.baseUrl, headers: authHeaders });
+    const http = axios.create({
+      baseURL: context.baseUrl,
+      headers: authHeaders
+    });
 
+    // Best-effort cleanup of any perks we created during this suite
     await Promise.all(
       Array.from(context.createdPerkIds).map((perkId) =>
         http.delete(`/perks/${perkId}`).catch(() => {})

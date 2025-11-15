@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import http from 'http';
 import mongoose from 'mongoose';
 import crypto from 'crypto';
@@ -5,6 +6,9 @@ import crypto from 'crypto';
 import app from '../src/app.js';
 import { connectDB } from '../src/config/db.js';
 import { User } from '../src/models/User.js';
+
+// Give integration tests ample time when running in CI
+jest.setTimeout(30000);
 
 // Helper to spin up the Express application on an ephemeral port so that the
 // tests exercise the real HTTP stack exactly as a user would.
@@ -64,17 +68,21 @@ describe('Authentication controller integration', () => {
     issuedToken = payload.token;
   });
 
-  /*
-  TODO: test login behaviour
-  - attempt login request with user credentials
-  - expect a 200 response
-  - expect a JWT token in the response
-  - expect the returned user profile to match the registered user
-  - store the issued token for use in subsequent tests
-  */
   test('authenticates the same user and issues a fresh JWT', async () => {
-    // This test will always fail until the TODO above is implemented.
-    expect(true).toBe(false);
+    const response = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: credentials.email, password: credentials.password })
+    });
+
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.token).toBeTruthy();
+    expect(payload.user.email).toBe(credentials.email.toLowerCase());
+
+    // Store the new token for subsequent authenticated requests
+    issuedToken = payload.token;
   });
 
   test('returns the public profile for the currently authenticated user', async () => {
